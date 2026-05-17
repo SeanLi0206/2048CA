@@ -213,17 +213,22 @@ def P2P_batch(idx1, idx2, pa, symmetric=True):
 
 class FMM_Solver_v3:
     def __init__(self, pa, size, max_per_node=10, max_level=5):
-        self.pa = pa                # 粒子陣列
-        self.size = size            # 模擬區域總尺寸
-        self.max_per_node = max_per_node # 每個節點最多容納粒子數 (超過則細分)
-        self.max_level = max_level  # 樹的最大深度
+        self.pa = pa                        # 粒子陣列
+        self.size = size                    # 模擬區域總尺寸
+        self.max_per_node = max_per_node    # 每個節點最多容納粒子數 (超過則細分)(useless in non adap) 
+        self.max_level = max_level          # 樹的最大深度
         self.root = None
 
     def build_tree(self):
         """構建四元樹並建立鄰居與交互列表。"""
-        pos = self.pa.pos
-        cx, cy = (pos.real.max() + pos.real.min()) / 2, (pos.imag.max() + pos.imag.min()) / 2
-        self.root = QuadtreeNode(complex(cx, cy), self.size * 1.1, 0)
+        pos = self.pa.pos                   # pos = pos[3][N]
+
+        # get center pos 
+        cx = (pos[0].max() + pos[0].min())/2 
+        cy = (pos[1].max() + pos[1].min())/2
+        cz = (pos[2].max() + pos[2].min())/2
+
+        self.root = OctreeNode(np.array([cx, cy, cz]), self.size * 1.1, 0)
         for i in range(self.pa.n): self._insert(self.root, i)
         self._finalize(self.root)
         self._build_lists(self.root)
@@ -237,9 +242,13 @@ class FMM_Solver_v3:
                 node.subdivide(self.pa)
                 self._insert(node, idx)
         else:
-            p = self.pa.pos[idx]
-            ci = (1 if p.real >= node.center.real else 0) + (2 if p.imag < node.center.imag else 0)
-            # 0:左上 1:右上 2:左下 3: 右下
+            # 0 => ---, 4 => +--, 2 => -+-, 1 => --+, 
+            # 3 => -++, 5 => +-+, 6 => ++-, 7 => +++
+            # 用2進位 + => 1, - => 0
+            ci = 4 * (self.pa.pos[0][idx] >= node.center[0]) + \
+                 2 * (self.pa.pos[1][idx] >= node.center[1]) + \
+                 1 * (self.pa.pos[2][idx] >= node.center[2])
+        
             self._insert(node.children[ci], idx)
 
     def _finalize(self, node):
@@ -249,9 +258,7 @@ class FMM_Solver_v3:
             for c in node.children: self._finalize(c)
 
     def _is_neighbor(self, n1, n2):
-        """判斷兩個節點是否在物理上相鄰。"""
-        return abs(n1.center.real - n2.center.real) <= (n1.size + n2.size) * 0.51 and \
-               abs(n1.center.imag - n2.center.imag) <= (n1.size + n2.size) * 0.51
+        return np.max(np.abs(n1.center - n2.center)) <= (n1.size + n2.size) * 0.51
 
     def _build_lists(self, node):
         # list 裡存node 

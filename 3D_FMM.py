@@ -20,6 +20,14 @@ for _n in range(_sz):
 _K = np.arange(MAX_P)
 _K1 = np.arange(1, MAX_P)
 
+# Nlm (P2M要用的const array)
+Nlm = np.zeros((MAX_P + 1, MAX_P + 1)) 
+
+for l in range(MAX_P + 1):
+    for m in range(l + 1):
+        Nlm[l, m] = np.sqrt(math.factorial(l - m) / math.factorial(l + m) )
+
+
 class ParticleArray:
     """
     粒子資料容器 (Structure of Arrays, SoA)。
@@ -51,9 +59,9 @@ class OctreeNode:
         self.is_leaf = True                                 # 是否為葉節點
         
         # 多極展開係數 (Multipole Expansion Coefficients) - 描述內部粒子對外部的影響
-        self.multipole_coeffs = np.zeros(MAX_P**2, dtype=complex)
+        self.multipole_coeffs = np.zeros((MAX_P + 1, 2 * MAX_P + 1), dtype=complex)
         # 局部展開係數 (Local Expansion Coefficients) - 描述外部遠方粒子對內部的影響
-        self.local_coeffs = np.zeros(MAX_P**2, dtype=complex)
+        self.local_coeffs = np.zeros((MAX_P + 1, 2 * MAX_P + 1), dtype=complex)
         
         self.neighbors = []         # 鄰居節點列表 (用於 P2P 計算)
         self.interaction_list = []  # 交互列表 (用於 M2L 轉換)
@@ -86,18 +94,68 @@ class OctreeNode:
 # --- FMM 核心算子 (Operators) ---
 
 def P2M(node, pa):
-    """
-    Particle-to-Multipole (P2M):
-    將葉節點內的粒子貢獻轉化為該節點的多極展開係數。
-    公式: a_0 = sum(m_i), a_k = sum(m_i * (z_i - z_c)^k / k)
-    """
-    if len(node.particle_idx) == 0: return
+    # 流程大概是 算particle -> center 的(r',theta',phi')
+    # (事實上我們只需要sin,cos(theta'), exp(i * m * phi'))
+    # 現在的展開係數是M_ml 要算 M_lm 要有 Ylm(theta',phi') 要有Ylm就要有 Plm(cos(theta')), Nlm 
+    # 此外Nlm 是Ylm 前面的const 因為他是一堆階乘算起來很花時間 所以這裡我先在外面算好再丟進來 
+    # m <= l <= MAX_P 
+   
+
+    # 算 (r',theta',phi')
+    N = len(node.particle_idx)
+
+    if N == 0: return
     idx = np.asarray(node.particle_idx)
-    dz = pa.pos[idx] - node.center
-    m = pa.mass[idx]
-    node.multipole_coeffs[0]  = m.sum()
-    for k in range(1, MAX_P):
-        node.multipole_coeffs[k]+= -np.sum(m * (dz**k)) / k
+    ds  = pa.pos[:, idx] - node.center.reshape(3, 1) # displacement 
+    dxy = np.sqrt(np.sum(ds**2[:2], axis = 0))       # distance on xy plane s' 
+    rs  = np.sqrt(np.sum(ds**2, axis = 0))           # r'
+    dxy = np.where(dxy < 1e-15, 1e-15, dxy)
+    rs  = np.where(rs < 1e-15, 1e-15, rs)
+    mas = pa.mass[idx]
+    
+    costheta = ds[2] / rs 
+    sintheta = np.sqrt(1 - costheta**2)
+    exp_iphi = (ds[0, :] + 1j * ds[1, :]) / dxy     # exp(iphi) = cos(phi) + i * sin(phi)
+    
+    # 算P_mn(phi')
+    # (1) P_(m-1)(m-1)       => P_mm     = -(2m - 1) * sin(theta') * P_(m-1)(m-1)(cos(theta'))
+    # (2) P_mm               => P_m(m+1) =  (2m + 1) * cos(theta') * P_mm(cos(theta'))
+    # (3) P_m(l-1), P_m(l-2) => P_ml     =  (2l - 1)/(l - m) * cos(theta') * P_m(l-1)(cos(theta'))
+    #                                    -  (l + m - 1)/(l - m) * P_m_(l-2)(cos(theta'))
+    # 從P_00 = 1 開始
+
+    Plm = np.zeros((MAX_P + 1 , MAX_P + 1, N)) # 每個particle 有自己的coeff 所以P = P[MAX_P][MAX_P][N]
+    Plm[0, 0, :] = 1.0
+
+    # (1):
+    for m in range(0, MAX_P):
+        # (1)
+        Plm[m + 1, m + 1, :] = -(2*m + 1) * sintheta * Plm[m, m, :]
+
+        # (2)
+        Plm[m + 1, m, :] =  (2*m + 1) * costheta * Plm[m, m, :]
+    
+    for l in range(2, MAX_P + 1):
+        # (3)
+        for m in range(l - 1):
+            Plm[l, m, :] = (2*l - 1) / (l - m) * costheta * Plm[l-1, m, :] \
+                         - (l + m - 1) / (l - m) * Plm[l-2, m, :] 
+    
+    # 算Ylm(theta',phi')
+    Ylm = np.zeros((MAX_P + 1, MAX_P + 1, N), dtype = complex)
+    for l in range(MAX_P + 1):
+        for m in range(l + 1):
+            Ylm[l, m, :] = Nlm[l, m] * Plm[l, m, :] * (exp_iphi)**m
+    
+    # 算Mlm
+    Mlm = np.zeros((MAX_P + 1, 2 * MAX_P + 1), dtype = complex) # m 從 -l 到 l  
+    for l in range(MAX_P + 1):
+        for m in range(l + 1):
+            # -l, -l+1, ..., -1, 0, 1, 2 .... l
+            Mlm[l, MAX_P + m] = np.sum(mas[:] * rs[:]**l * np.conj(Ylm[l, m, :])) # Y_l(-m) = Y_lm*
+            if m: Mlm[l, MAX_P - m] = np.sum(mas[:] * rs[:]**l * Ylm[l, m, :])
+
+    node.multipole_coeffs = Mlm
 
 def M2M(parent, child):
     """
@@ -157,9 +215,9 @@ def L2P_batch(node, pa):
     """
     if len(node.particle_idx) == 0: return
     idx = np.asarray(node.particle_idx)
-    dz = pa.pos[idx] - node.center
+    dz = pa.pos[:, idx] - node.center.reshape(3, 1)
     
-    # 計算勢能: Phi(z) = Re( sum( b_k * (z - z_c)^k ) )
+    # 計算勢能
     pot = np.zeros(len(idx), dtype=complex)
     for k in range(MAX_P):
         pot += node.local_coeffs[k] * (dz**k)

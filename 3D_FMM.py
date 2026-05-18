@@ -17,15 +17,15 @@ for _n in range(_sz):
         BINOM[_n, _k] = math.comb(_n, _k)
 
 # 預計算索引陣列，用於 NumPy 向量化運算
-_K = np.arange(MAX_P)
+_K  = np.arange(MAX_P)
 _K1 = np.arange(1, MAX_P)
 
 # 一些const array initialization
-# 因為他們都是[MAX_P + 1, MAX_P + 1] 所以就直接說他們 =
+
 # Nlm (P2M要用的const array)
 Nlm = np.zeros((MAX_P + 1, MAX_P + 1)) 
 # Anm (M2M要用的const array)
-Anm = Nlm
+Anm = np.zeros((MAX_P + 1, 2 * MAX_P + 1)) 
 
 class ParticleArray:
     """
@@ -97,10 +97,13 @@ def build_const_Array():
     for l in range(MAX_P + 1):
         for m in range(l + 1):
             Nlm[l, m] = np.sqrt(math.factorial(l - m) / math.factorial(l + m))
-            Anm[l, m] = (-1)**n / np.sqrt(math.factorial(n - m) * math.factorial(n + m))
+
+            AnmAns = (-1)**l / np.sqrt(math.factorial(l - m) * math.factorial(l + m))
+            Anm[l, MAX_P + m] = AnmAns
+            if m : Anm[l, MAX_P - m] = AnmAns
 
 def get_LegendreP(size, sintheta, costheta):
-    
+
     sintheta = np.atleast_1d(sintheta)
     costheta = np.atleast_1d(costheta)
     # 算P_mn(phi')
@@ -125,12 +128,29 @@ def get_LegendreP(size, sintheta, costheta):
             Plm[l, m, :] = (2*l - 1) / (l - m) * costheta * Plm[l-1, m, :] \
                         - (l + m - 1) / (l - m) * Plm[l-2, m, :] 
     if(size == 1):
-        return(Plm[:, :, 0])
+        return Plm[:, :, 0]
 
-    return(Plm)
+    return Plm
+
+def get_SphHarmoY(size, Plm, exp_i_phi):
+    Plm = np.asarray(Plm).reshape(MAX_P + 1, MAX_P + 1, -1)
+    Ylm = np.zeros((MAX_P + 1, MAX_P + 1, size), dtype = complex)
+
+    exp_i_phi = np.atleast_1d(exp_i_phi)
+    
+
+    for l in range(MAX_P + 1):
+        exp_now = np.ones(size, dtype = complex)
+        for m in range(l + 1):
+            Ylm[l, m, :] = Nlm[l, m] * Plm[l, m, :] * exp_now
+            exp_now *= exp_i_phi
+
+    if(size == 1):
+        return Ylm[:, :, 0]
+    return Ylm
 
 def get_inf(pos1, pos2):
-    pos1, pos2 = np.asarray(pos1).reshape(3, -1), np.asarray(pos2).reshape(3, -1)
+    pos1, pos2 = np.asarray(pos1).reshape(3, -1), np.asarray(pos2).reshape(3, -1) # 讓array 大小固定
 
     ds  = pos1 - pos2                               # displacement (這是一個array, 大小取決於idx = ?)
     dxy = np.sqrt(np.sum(ds[:2]**2, axis = 0))      # distance on xy plane s' 
@@ -144,8 +164,6 @@ def get_inf(pos1, pos2):
 
     return ds, rs, dxy, costheta, sintheta, exp_iphi
 
-
-
 # --- FMM 核心算子 (Operators) ---
 
 def P2M(node, pa):
@@ -156,45 +174,19 @@ def P2M(node, pa):
     # 此外Nlm 是Ylm 前面的const 因為他是一堆階乘算起來很花時間 所以這裡我先在外面算好再丟進來 
     # m <= l <= MAX_P 
    
-
     # 算 (r',theta',phi')
     N = len(node.particle_idx)
     if N == 0: return
 
     idx = np.asarray(node.particle_idx)
     mas = pa.mass[idx]
-    ds, rs, dxy, costheta, sintheta, exp_iphi = get_inf(pa.pos[:, idx], node.center.reshape(3, 1))
+    ds, rs, dxy, costheta, sintheta, exp_iphi = get_inf(pa.pos[:, idx], node.center.reshape(3, 1)) # pos1, pos2 (ds = pos2 -> pos1(pos1 - pos2))
     
     # 算P_mn(phi')
-    # (1) P_(m-1)(m-1)       => P_mm     = -(2m - 1) * sin(theta') * P_(m-1)(m-1)(cos(theta'))
-    # (2) P_mm               => P_m(m+1) =  (2m + 1) * cos(theta') * P_mm(cos(theta'))
-    # (3) P_m(l-1), P_m(l-2) => P_ml     =  (2l - 1)/(l - m) * cos(theta') * P_m(l-1)(cos(theta'))
-    #                                    -  (l + m - 1)/(l - m) * P_m_(l-2)(cos(theta'))
-    # 從P_00 = 1 開始
-
-    # Plm = np.zeros((MAX_P + 1 , MAX_P + 1, N)) # 每個particle 有自己的coeff 所以P = P[MAX_P][MAX_P][N]
-    # Plm[0, 0, :] = 1.0
-
-    # # (1):
-    # for m in range(0, MAX_P):
-    #     # (1)
-    #     Plm[m + 1, m + 1, :] = -(2*m + 1) * sintheta * Plm[m, m, :]
-
-    #     # (2)
-    #     Plm[m + 1, m, :] =  (2*m + 1) * costheta * Plm[m, m, :]
-    
-    # for l in range(2, MAX_P + 1):
-    #     # (3)
-    #     for m in range(l - 1):
-    #         Plm[l, m, :] = (2*l - 1) / (l - m) * costheta * Plm[l-1, m, :] \
-    #                      - (l + m - 1) / (l - m) * Plm[l-2, m, :] 
-    Plm = get_LegendreP(N, sintheta, costheta)
+    Plm = get_LegendreP(N, sintheta, costheta) # size, sintheta, costheta
     
     # 算Ylm(theta',phi')
-    Ylm = np.zeros((MAX_P + 1, MAX_P + 1, N), dtype = complex)
-    for l in range(MAX_P + 1):
-        for m in range(l + 1):
-            Ylm[l, m, :] = Nlm[l, m] * Plm[l, m, :] * (exp_iphi)**m
+    Ylm = get_SphHarmoY(size, exp_iphi) # size, expiphi 
     
     # 算Mlm
     Mlm = np.zeros((MAX_P + 1, 2 * MAX_P + 1), dtype = complex) # m 從 -l 到 l  
@@ -209,43 +201,41 @@ def P2M(node, pa):
 def M2M(parent, child):
     # Multipole-to-Multipole 展開係數平移並累加到父節點
     # 有 O(p^4) 很無腦的寫法 <-- 我這裡用的
-    # 這個方法一樣要建表格 Anm 啊我一樣寫在外面
+    # 這個方法一樣要建表格 Anm , 一樣寫在外面
     # 還有O(p^3) exp 的方法  可能之後會改用這個
-    # 
 
     # 算 (r',theta',phi')
-    ds  = child.center - parent.center
-    dxy = np.sqrt(np.sum(ds[:2]**2)) 
-    dr  = np.sqrt(np.sum(ds**2))
+    ds, rs, dxy, costheta, sintheta, exp_iphi = get_inf(child.center, parent.center) # pos1, pos2 (ds = pos2 -> pos1(pos1 - pos2))
 
-    costheta = ds[2] / dr 
-    sintheta = dxy / dr  
-    exp_iphi = (ds[0] + 1j * ds[1]) / dxy
+    # 算Plm
+    Plm = get_LegendreP(1, sintheta, costheta)
 
     # 算Ylm(theta',phi')
-    Ylm = np.zeros((MAX_P + 1, MAX_P + 1), dtype = complex)
-    for l in range(MAX_P + 1):
-        for m in range(l + 1):
-            Ylm[l, m] = Nlm[l, m] * Plm[l, m, :] * (exp_iphi)**m
-
+    Ylm = get_SphHarmoY(1, Plm, exp_iphi) # size, Plm, exp_iphi
 
     # 算M'lm 
     Olm = child.multipole_coeffs
-    Mjk = np.zeros((MAX_P + 1, 2 * MAX_P + 3),dtype = complex)
+    Mjk = np.zeros((MAX_P + 1, 2 * MAX_P + 1), dtype = complex)
     for j in range(MAX_P + 1):
-        for k in range(k + 1):
-            for n in range(j):
-                for m in range(n + 1):
+        for k in range(-j, j + 1):
+            add_num = 0.0 + 0.0j 
+            for n in range(j + 1):
+                for m in range(-n, n + 1):
                     # j - n  > 0 
                     # 但是 k - m 有些 < 0 
-                    # 我們上面的P2M 有定義 Olm(# -l, -l+1, ..., -1, 0, 1, 2 .... l)  
-                    Mjk[j, k] += Olm[j - n, MAX_P + k - m] * (1j)**(abs(k)-abs(m)-abs(k-m)) \
-                               * Anm[n, m] * A[j - n, MAX_P + k - m] * dr**n * Y[n, -m]
-                    if k: 
-                        Mjk[j, k] += Olm[j - n, MAX_P + k - m] * (1j)**(abs(k)-abs(m)-abs(k-m)) \
-                                  * Anm[n, m] * A[j - n, MAX_P + k - m] * dr**n * Y[n, -m]
+                    # 我們上面的P2M 有定義 Olm(# -l, -l+1, ..., -1, 0, 1, 2 .... l)
+                
+                    # Olm[j - n, k - m] = 0 不再這裡切掉的話會有redundent的計算
+                    if(abs(k - m) > (j - n)):
+                        continue
+                    # Y +m -m 定義不同
+                    if(m > 0): flag = np.conj(Ylm[n, m]) # m > 0 => -m < 0 Yn(-m) = *Ynm
+                    else: flag = Ylm[n, -m]
 
-
+                    add_num += (Olm[j - n, MAX_P + k - m] * (1j)**(abs(k)-abs(m)-abs(k-m))  \
+                                       *  Anm[n, MAX_P + m] * Anm[j - n, MAX_P + k - m] * rs**n * (flag))
+                
+            Mjk[j, MAX_P + k] += add_num / Anm[j, MAX_P + k]
     parent.multipole_coeffs = Mjk
 
 def M2L(target, source):
@@ -277,7 +267,7 @@ def L2L(parent, child):
     將父節點的局部展開係數平移並傳遞給子節點。
     這是向下遍歷 (Downward Pass) 的核心。
     """
-    # 注意到現在的z0 = parent.center , 我們要在z = 0 展開(d = parent.center - child.center)
+    # 注意到現在的z0 = parent.center , 我們要在z = 0 展開(d = parent.center - child.cente r)
     d = child.center - parent.center
     for k in range(MAX_P):
         js = np.arange(k, MAX_P)

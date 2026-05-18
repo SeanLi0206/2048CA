@@ -20,13 +20,12 @@ for _n in range(_sz):
 _K = np.arange(MAX_P)
 _K1 = np.arange(1, MAX_P)
 
+# 一些const array initialization
+# 因為他們都是[MAX_P + 1, MAX_P + 1] 所以就直接說他們 =
 # Nlm (P2M要用的const array)
 Nlm = np.zeros((MAX_P + 1, MAX_P + 1)) 
-
-for l in range(MAX_P + 1):
-    for m in range(l + 1):
-        Nlm[l, m] = np.sqrt(math.factorial(l - m) / math.factorial(l + m) )
-
+# Anm (M2M要用的const array)
+Anm = Nlm
 
 class ParticleArray:
     """
@@ -92,6 +91,14 @@ class OctreeNode:
         self.particle_idx = []
 
 # --- FMM 核心算子 (Operators) ---
+
+def build_const_Array():
+    # 建一些P2M, M2M要用的表 
+
+    for l in range(MAX_P + 1):
+        for m in range(l + 1):
+            Nlm[l, m] = np.sqrt(math.factorial(l - m) / math.factorial(l + m))
+            Anm[l, m] = (-1)**n / np.sqrt(math.factorial(n - m) * math.factorial(n + m))
 
 def P2M(node, pa):
     # Particle to Multipole 將葉節點內的粒子貢獻轉化為該節點的多極展開係數
@@ -160,24 +167,45 @@ def P2M(node, pa):
 
 def M2M(parent, child):
     # Multipole-to-Multipole 展開係數平移並累加到父節點
-    # 有 O(p^4) 很無腦的寫法
-    # 還有O(p^3) exp 的方法 <-- 我這裡用的
+    # 有 O(p^4) 很無腦的寫法 <-- 我這裡用的
+    # 這個方法一樣要建表格 Anm 啊我一樣寫在外面
+    # 還有O(p^3) exp 的方法  可能之後會改用這個
+    # 
 
     # 算 (r',theta',phi')
     ds  = child.center - parent.center
     dxy = np.sqrt(np.sum(ds[:2]**2)) 
     dr  = np.sqrt(np.sum(ds**2))
 
+    costheta = ds[2] / dr 
+    sintheta = dxy / dr  
+    exp_iphi = (ds[0] + 1j * ds[1]) / dxy
+
+    # 算Ylm(theta',phi')
+    Ylm = np.zeros((MAX_P + 1, MAX_P + 1), dtype = complex)
+    for l in range(MAX_P + 1):
+        for m in range(l + 1):
+            Ylm[l, m] = Nlm[l, m] * Plm[l, m, :] * (exp_iphi)**m
+
+
     # 算M'lm 
-    for j in range()
-        for n in range(j):
-            for m in range(n + 1):
+    Olm = child.multipole_coeffs
+    Mjk = np.zeros((MAX_P + 1, 2 * MAX_P + 3),dtype = complex)
+    for j in range(MAX_P + 1):
+        for k in range(k + 1):
+            for n in range(j):
+                for m in range(n + 1):
+                    # j - n  > 0 
+                    # 但是 k - m 有些 < 0 
+                    # 我們上面的P2M 有定義 Olm(# -l, -l+1, ..., -1, 0, 1, 2 .... l)  
+                    Mjk[j, k] += Olm[j - n, MAX_P + k - m] * (1j)**(abs(k)-abs(m)-abs(k-m)) \
+                               * Anm[n, m] * A[j - n, MAX_P + k - m] * dr**n * Y[n, -m]
+                    if k: 
+                        Mjk[j, k] += Olm[j - n, MAX_P + k - m] * (1j)**(abs(k)-abs(m)-abs(k-m)) \
+                                  * Anm[n, m] * A[j - n, MAX_P + k - m] * dr**n * Y[n, -m]
 
-    parent.multipole_coeffs += for i in
 
-
-
-
+    parent.multipole_coeffs = Mjk
 
 def M2L(target, source):
     """
@@ -393,6 +421,7 @@ if __name__ == "__main__":
     xs, ys, ms = np.random.uniform(-L/2, L/2, N), np.random.uniform(-L/2, L/2, N), np.random.uniform(0.5, 1.5, N)
     
     # --- FMM 計算 ---
+    build_const_Array()
     pa_fmm = ParticleArray(xs, ys, ms)
     solver = FMM_Solver_v3(pa_fmm, L)
     solver.build_tree()

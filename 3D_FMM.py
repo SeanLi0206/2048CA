@@ -94,6 +94,7 @@ class OctreeNode:
 # --- FMM 核心算子 (Operators) ---
 
 def P2M(node, pa):
+    # Particle to Multipole 將葉節點內的粒子貢獻轉化為該節點的多極展開係數
     # 流程大概是 算particle -> center 的(r',theta',phi')
     # (事實上我們只需要sin,cos(theta'), exp(i * m * phi'))
     # 現在的展開係數是M_ml 要算 M_lm 要有 Ylm(theta',phi') 要有Ylm就要有 Plm(cos(theta')), Nlm 
@@ -107,7 +108,7 @@ def P2M(node, pa):
     if N == 0: return
     idx = np.asarray(node.particle_idx)
     ds  = pa.pos[:, idx] - node.center.reshape(3, 1) # displacement 
-    dxy = np.sqrt(np.sum(ds**2[:2], axis = 0))       # distance on xy plane s' 
+    dxy = np.sqrt(np.sum(ds[:2, :]**2, axis = 0))    # distance on xy plane s' 
     rs  = np.sqrt(np.sum(ds**2, axis = 0))           # r'
     dxy = np.where(dxy < 1e-15, 1e-15, dxy)
     rs  = np.where(rs < 1e-15, 1e-15, rs)
@@ -158,20 +159,25 @@ def P2M(node, pa):
     node.multipole_coeffs = Mlm
 
 def M2M(parent, child):
-    """
-    Multipole-to-Multipole (M2M):
-    將子節點的多極展開係數平移並累加到父節點。
-    這是向上遍歷 (Upward Pass) 的核心。
-    """
-    # 原本是在z0展開 現在移到 z = 0 展開 (=> z0 = child.center - parent.center)
-    a0 = child.multipole_coeffs[0]
+    # Multipole-to-Multipole 展開係數平移並累加到父節點
+    # 有 O(p^4) 很無腦的寫法
+    # 還有O(p^3) exp 的方法 <-- 我這裡用的
 
-    d = child.center - parent.center                 # z0
-    parent.multipole_coeffs[0] += a0                 # b0 = a0
-    for l in range(1, MAX_P):
-        parent.multipole_coeffs[l] += -a0 * d**l / l
-        for k in range(1, l+1):
-            parent.multipole_coeffs[l] += child.multipole_coeffs[k] * (d**(l-k)) * BINOM[l-1, k-1]
+    # 算 (r',theta',phi')
+    ds  = child.center - parent.center
+    dxy = np.sqrt(np.sum(ds[:2]**2)) 
+    dr  = np.sqrt(np.sum(ds**2))
+
+    # 算M'lm 
+    for j in range()
+        for n in range(j):
+            for m in range(n + 1):
+
+    parent.multipole_coeffs += for i in
+
+
+
+
 
 def M2L(target, source):
     """

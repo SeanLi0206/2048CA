@@ -305,19 +305,30 @@ def L2P_batch(node, pa):
     """
     if len(node.particle_idx) == 0: return
     idx = np.asarray(node.particle_idx)
-    dz = pa.pos[:, idx] - node.center.reshape(3, 1)
+
+    ds, rs, dxy, costheta, sintheta, exp_iphi = get_inf(pa.pos[:, idx], node.center.reshape(3, 1))
     
+    Plm = get_LegendreP(sintheta, costheta, MAX_P + 1)
+    Ylm = get_SphHarmoY(Plm, exp_iphi, MAX_P + 1)
+    Ljk = node.local_coeffs
+
     # 計算勢能
     pot = np.zeros(len(idx), dtype=complex)
-    for k in range(MAX_P):
-        pot += node.local_coeffs[k] * (dz**k)
+    rs_now = 1.0
+    for j in range(MAX_P + 1):
+        for k in range(-j, j + 1):
+            if(k < 0): flag = np.conj(Ylm[j, -k, :])
+            else: flag = Ylm[j, k, :] 
+            pot += Ljk[j, MAX_P + k] * flag * rs_now 
+        rs_now *= rs
     pa.potential[idx] -= GRAVITATIONAL_CONSTANT * pot.real
-    
-    # 計算受力 (勢能的負梯度): F = -conj( dPhi/dz )
-    force = np.zeros(len(idx), dtype=complex)
-    for k in range(1, MAX_P):
-        force += k * node.local_coeffs[k] * (dz**(k-1))
-    pa.force[idx] -= GRAVITATIONAL_CONSTANT * force.conjugate()
+
+    # 計算受力 (勢能的負梯度): F = -conj( dPhi/dz ) 
+    # 力超難算 之後要orbit integration 的話再弄比較好
+    # force = np.zeros(len(idx), dtype=complex)
+    # for k in range(1, MAX_P):
+    #     force += k * node.local_coeffs[k] * (dz**(k-1))
+    # pa.force[idx] -= GRAVITATIONAL_CONSTANT * force.conjugate()
 
 def P2P_batch(idx1, idx2, pa, symmetric=True):
     """
@@ -327,8 +338,8 @@ def P2P_batch(idx1, idx2, pa, symmetric=True):
     """
 
     if len(idx1) == 0 or len(idx2) == 0: return
-    p1, p2 = pa.pos[:,  idx1], pa.pos[;,  idx2] 
-    m1, m2 = pa.mass[:, idx1], pa.mass[;, idx2]
+    p1, p2 = pa.pos[:,  idx1], pa.pos[:,  idx2] 
+    m1, m2 = pa.mass[:, idx1], pa.mass[:, idx2]
     
     if symmetric and id(idx1) == id(idx2):
         # 同一節點內的粒子兩兩交互 (利用對稱性減少一半計算量)

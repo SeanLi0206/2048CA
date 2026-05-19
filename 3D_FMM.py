@@ -4,9 +4,9 @@ import math
 import time
 
 # --- 核心參數設定 ---
-FMM_ORDER = 12              # 多極展開的階數 (p)，階數越高精度越高，但計算量也越大
+FMM_ORDER = 3                # 多極展開的階數 (p)，階數越高精度越高，但計算量也越大
 GRAVITATIONAL_CONSTANT = 1.0 # 重力常數 G
-MAX_P = FMM_ORDER + 1       # 包含 0 階項的總項數
+MAX_P = FMM_ORDER + 1        # 包含 0 階項的總項數
 
 # --- 預計算組合數 (Binomial Coefficients) ---
 # FMM 中的平移算子 (M2M, M2L, L2L) 頻繁使用組合數，預計算可大幅提升效能
@@ -97,7 +97,7 @@ def build_const_Array():
     for l in range(2 * MAX_P + 1):
         for m in range(l + 1):
             Nlm[l, m] = np.sqrt(math.factorial(l - m) / math.factorial(l + m))
-            Anm[l, m] = (-1)**l / np.sqrt(math.factorial(l - m) * math.factorial(l + m))
+            Anm[l, m] = (-1)**l / np.sqrt(float(math.factorial(l - m) * math.factorial(l + m)))
 
 def get_LegendreP(sintheta, costheta, Pscale):
     sintheta = np.atleast_1d(sintheta)
@@ -191,8 +191,8 @@ def P2M(node, pa):
         num_indep_of_m = mas * rs**l
         for m in range(l + 1):
             # -l, -l+1, ..., -1, 0, 1, 2 .... l
-            Mlm[l, MAX_P + m] = np.sum(num_indep_of_m * np.conj(Ylm[l, m, :])) # Y_l(-m) = Y_lm*
-            if m: Mlm[l, MAX_P - m] = np.sum(num_indep_of_m * Ylm[l, m, :])
+            Mlm[l, MAX_P + m] = np.sum(num_indep_of_m * np.conj(Ylm[l, m])) # Y_l(-m) = Y_lm*
+            if m: Mlm[l, MAX_P - m] = np.sum(num_indep_of_m * Ylm[l, m])
 
     node.multipole_coeffs = Mlm
 
@@ -201,6 +201,9 @@ def M2M(parent, child):
     # 有 O(p^4) 很無腦的寫法 <-- 我這裡用的
     # 這個方法一樣要建表格 Anm , 一樣寫在外面
     # 還有O(p^3) exp 的方法  可能之後會改用這個
+
+    if np.all(child.multipole_coeffs == 0): 
+        return
 
     # 算 (r',theta',phi')
     ds, rs, dxy, costheta, sintheta, exp_iphi = get_inf(child.center, parent.center) # pos1, pos2 (ds = pos2 -> pos1(pos1 - pos2))
@@ -234,7 +237,7 @@ def M2M(parent, child):
                                        *  Anm[n, abs(m)] * Anm[j - n, abs(k - m)] * rs**n * (flag))
                 
             Mjk[j, MAX_P + k] += add_num / Anm[j, abs(k)]
-    parent.multipole_coeffs = Mjk
+    parent.multipole_coeffs += Mjk
 
 def M2L(target, source):
     # 丟進來兩個node
@@ -243,6 +246,10 @@ def M2L(target, source):
     將遠方源節點的多極展開轉換為目標節點的局部展開。
     這是 FMM 最關鍵的一步，將「遠方群體」的影響轉化為「本地場」的近似。
     """
+
+    if np.all(source.multipole_coeffs == 0): 
+        return
+    
     # pos1, pos2 (ds = pos2 -> pos1(pos1 - pos2))
     ds, rs, dxy, costheta, sintheta, exp_iphi = get_inf(source.center, target.center)
     
@@ -266,7 +273,7 @@ def M2L(target, source):
                              * Anm[j , abs(k)] * flag / ((-1)**n * rs**(j + n + 1) * Anm[j + n, abs(m - k)]) # Anm 會跑到2P
 
             Ljk[j, MAX_P + k] += add_num
-    target.local_coeffs = Ljk
+    target.local_coeffs += Ljk
 
 def L2L(parent, child):
     """
@@ -277,8 +284,8 @@ def L2L(parent, child):
     # pos1, pos2 (ds = pos2 -> pos1(pos1 - pos2))
     ds, rs, dxy, costheta, sintheta, exp_iphi = get_inf(child.center, parent.center)
     
-    Plm = get_LegendreP(sintheta, costheta, MAX_P + 1)
-    Ylm = get_SphHarmoY(Plm, exp_iphi, MAX_P + 1)
+    Plm = get_LegendreP(sintheta, costheta, 2 * MAX_P + 1)
+    Ylm = get_SphHarmoY(Plm, exp_iphi, 2 * MAX_P + 1)
 
     Onm = parent.local_coeffs
     Ljk = np.zeros((MAX_P + 1, 2 * MAX_P + 1), dtype = complex)
@@ -317,8 +324,8 @@ def L2P_batch(node, pa):
     rs_now = 1.0
     for j in range(MAX_P + 1):
         for k in range(-j, j + 1):
-            if(k < 0): flag = np.conj(Ylm[j, -k, :])
-            else: flag = Ylm[j, k, :] 
+            if(k < 0): flag = np.conj(Ylm[j, -k])
+            else: flag = Ylm[j, k] 
             pot += Ljk[j, MAX_P + k] * flag * rs_now 
         rs_now *= rs
     pa.potential[idx] -= GRAVITATIONAL_CONSTANT * pot.real
@@ -339,7 +346,7 @@ def P2P_batch(idx1, idx2, pa, symmetric=True):
 
     if len(idx1) == 0 or len(idx2) == 0: return
     p1, p2 = pa.pos[:,  idx1], pa.pos[:,  idx2] 
-    m1, m2 = pa.mass[:, idx1], pa.mass[:, idx2]
+    m1, m2 = pa.mass[idx1], pa.mass[idx2]
     
     if symmetric and id(idx1) == id(idx2):
         # 同一節點內的粒子兩兩交互 (利用對稱性減少一半計算量)
@@ -352,10 +359,10 @@ def P2P_batch(idx1, idx2, pa, symmetric=True):
 
             # 更新粒子 i
             pa.potential[idx1[i]] -= GRAVITATIONAL_CONSTANT * np.sum(m1[i+1:] * inv_r, axis = 0)
-            pa.force[idx1[i]]     -= GRAVITATIONAL_CONSTANT * np.sum(m1[i+1:] * dz * inv_r3, axis = 1)
+            #pa.force[idx1[i]]     -= GRAVITATIONAL_CONSTANT * np.sum(m1[i+1:] * dz * inv_r3, axis = 1)
             # 更新其餘粒子 (反作用力)
             pa.potential[idx1[i+1:]] -= GRAVITATIONAL_CONSTANT * m1[i] * inv_r
-            pa.force[idx1[i+1:]]     += GRAVITATIONAL_CONSTANT * m1[i] * dz * inv_r3
+            #pa.force[idx1[i+1:]]     += GRAVITATIONAL_CONSTANT * m1[i] * dz * inv_r3
     else:
         # 不同節點間的粒子交互
         for i in range(len(idx1)):
@@ -375,7 +382,7 @@ def P2P_batch(idx1, idx2, pa, symmetric=True):
 # --- FMM 求解器主類別 ---
 
 class FMM_Solver_v3:
-    def __init__(self, pa, size, max_per_node=10, max_level=5):
+    def __init__(self, pa, size, max_per_node=10, max_level=3):
         self.pa = pa                        # 粒子陣列
         self.size = size                    # 模擬區域總尺寸
         self.max_per_node = max_per_node    # 每個節點最多容納粒子數 (超過則細分)(useless in non adap) 

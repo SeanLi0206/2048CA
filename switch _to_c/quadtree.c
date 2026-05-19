@@ -117,7 +117,7 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
         max_level = (int)ceil(log((double)n / max_per_leaf) / log(4.0));
         if (max_level < 1) max_level = 1;
     }
-    if (max_level > MAX_LEVEL) max_level = MAX_LEVEL;
+    if (max_level > FMM_MAX_LEVEL) max_level = FMM_MAX_LEVEL;
 
     int grid_n = 1 << max_level;  /* 2^max_level */
 
@@ -192,7 +192,7 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
 
             if (np <= 0) continue;          /* 空節點，跳過 */
 
-            //先暫時棄用，算到max。
+            // 先暫時棄用，算到max。
             // if (np <= max_per_leaf) {       /* 粒子數夠少 → leaf，不再分割 */
             //     leaves[num_leaves++] = node_id;
             //     continue;
@@ -253,6 +253,39 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
         }
     }
 
+
+    double *sort_x = (double *)malloc(n * sizeof(double));
+    double *sort_y = (double *)malloc(n * sizeof(double));
+    double *sort_mass = (double *)malloc(n * sizeof(double));
+    double *sort_potential = (double *)malloc(n * sizeof(double));
+    double *sort_fx = (double *)malloc(n * sizeof(double));
+    double *sort_fy = (double *)malloc(n * sizeof(double));
+    /*資料搬遷*/
+    for (int i = 0; i < n; i++) {
+        sort_x[i] = particles[sort_idx[i]].x;
+        sort_y[i] = particles[sort_idx[i]].y;
+        sort_mass[i] = particles[sort_idx[i]].mass;
+        sort_potential[i] = particles[sort_idx[i]].potential;
+        sort_fx[i] = particles[sort_idx[i]].fx;
+        sort_fy[i] = particles[sort_idx[i]].fy;
+    }
+    // for debug
+    // FILE *fp = fopen("log.txt", "a");
+    // for (int i = 0; i < num_leaves ; i++) {
+    //     fprintf(fp, "--------------------------------\n");
+    //     int j = leaves[i];
+    //     int start = nstart[j];
+    //     int end = nend[j];
+    //     for (int k = start; k <= end; k++) {
+    //         //寫入log.txt檔案
+    //         fprintf(fp, "leaf[%d]_P[%d]_x = %f\n", j, k, sort_x[k]);
+    //         fprintf(fp, "leaf[%d]_P[%d]_y = %f\n", j, k, sort_y[k]);
+    //         fprintf(fp, "leaf[%d]_P[%d]_mass = %f\n", j, k, sort_mass[k]);
+    //     }
+    // }
+    // printf("num_leaves = %d\n", num_leaves);
+    // fclose(fp);
+
     /* ---------- 9. 封裝回傳 ---------- */
     HilbertTree *tree = (HilbertTree *)malloc(sizeof(HilbertTree));
     tree->sort_indices  = sort_idx;
@@ -270,6 +303,12 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
     tree->max_level     = max_level;
     tree->total_nodes   = total_nodes;
     tree->n_particles   = n;
+    tree->sort_x        = sort_x;
+    tree->sort_y        = sort_y;
+    tree->sort_mass     = sort_mass;
+    tree->sort_potential = sort_potential;
+    tree->sort_fx       = sort_fx;
+    tree->sort_fy       = sort_fy;
 
     return tree;
 }

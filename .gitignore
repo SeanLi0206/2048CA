@@ -1,0 +1,32 @@
+# --- LaTeX 暫存檔 (這些絕對不要進 GitHub) ---
+*.aux
+*.log
+*.toc
+*.out
+*.pdf
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.bbl
+*.blg
+*.pytxcode
+
+# --- C++ 編譯結果 ---
+*.exe
+*.o
+*.obj
+*.out
+/build/
+
+# --- Windows 系統垃圾 ---
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# --- Git 安全設定 ---
+.DS_Store
+
+# --- 壓縮檔 ---
+*.zip
+*.rar
+*.gz

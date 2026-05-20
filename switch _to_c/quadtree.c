@@ -100,6 +100,7 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
     /* ---------- 1. 計算 bounding box ---------- */
     double xmin = DBL_MAX,  ymin = DBL_MAX;
     double xmax = -DBL_MAX, ymax = -DBL_MAX;
+    #pragma omp parallel for reduction(min:xmin,ymin) reduction(max:xmax,ymax)
     for (int i = 0; i < n; i++) {
         if (particles[i].x < xmin) xmin = particles[i].x;
         if (particles[i].x > xmax) xmax = particles[i].x;
@@ -117,13 +118,14 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
         max_level = (int)ceil(log((double)n / max_per_leaf) / log(4.0));
         if (max_level < 1) max_level = 1;
     }
-    if (max_level > MAX_LEVEL) max_level = MAX_LEVEL;
+    if (max_level > FMM_MAX_LEVEL) max_level = FMM_MAX_LEVEL;
 
     int grid_n = 1 << max_level;  /* 2^max_level */
 
     /* ---------- 3. 計算每個粒子的 Hilbert index ---------- */
     uint64_t *keys = (uint64_t *)malloc(n * sizeof(uint64_t));
     int *sort_idx  = (int *)malloc(n * sizeof(int));
+    #pragma omp parallel for
     for (int i = 0; i < n; i++) {
         double nx = (particles[i].x - ox) / domain;
         double ny = (particles[i].y - oy) / domain;
@@ -159,6 +161,7 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
     double *nsz    = (double *)malloc(total_nodes * sizeof(double));
 
     /* 預設所有節點為空 (start > end) */
+    #pragma omp parallel for
     for (int i = 0; i < total_nodes; i++) {
         nstart[i] = 0;
         nend[i]   = -1;
@@ -184,6 +187,7 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
         for (int k = 0; k < max_level - lv - 1; k++)
             cells_per_child *= 4;
 
+        #pragma omp parallel for schedule(dynamic, 64)
         for (int i = 0; i < count_cur; i++) {
             int node_id = base_cur + i;
             int s = nstart[node_id];
@@ -192,7 +196,7 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
 
             if (np <= 0) continue;          /* 空節點，跳過 */
 
-            //先暫時棄用，算到max。
+            // 先暫時棄用，算到max。
             // if (np <= max_per_leaf) {       /* 粒子數夠少 → leaf，不再分割 */
             //     leaves[num_leaves++] = node_id;
             //     continue;
@@ -223,22 +227,32 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
         count_cur *= 4;
     }
 
-    /* 最深層：所有非空節點都是 leaf */
+    /* 最深層：所有非空節點都是 leaf
+     * 用 atomic capture 平行收集；leaves 順序會打亂，但 P2M / M2M 不在意順序。 */
+    #pragma omp parallel for
     for (int i = 0; i < count_cur; i++) {
         int node_id = base_cur + i;
-        if (nstart[node_id] <= nend[node_id])
-            leaves[num_leaves++] = node_id;
+        if (nstart[node_id] <= nend[node_id]) {
+            int pos;
+            #pragma omp atomic capture
+            pos = num_leaves++;
+            leaves[pos] = node_id;
+        }
     }
 
     leaves = (int *)realloc(leaves, num_leaves * sizeof(int));
 
-    /* ---------- 8. 計算每個節點的幾何資訊 ---------- */
+    /* ---------- 8. 計算每個節點的幾何資訊 ----------
+     * 注意：外層 lv 迴圈絕對不能用 #pragma omp parallel for，
+     * 因為 base / cnt 是跨 iteration 累加的共享變數，會被 race。
+     * 改成 base / cnt 直接從 lv 算出來，並平行化內層節點迴圈。 */
     {
         int base = 0;
         int cnt  = 1;
         for (int lv = 0; lv <= max_level; lv++) {
             double cell_size = domain / (1 << lv);
             int grid_at_lv = 1 << lv;
+            #pragma omp parallel for
             for (int i = 0; i < cnt; i++) {
                 int node_id = base + i;
                 /* 節點 i 在 level lv 的序號 → 用 d2xy 反推格點座標 */
@@ -252,6 +266,40 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
             cnt  *= 4;
         }
     }
+
+
+    double *sort_x = (double *)malloc(n * sizeof(double));
+    double *sort_y = (double *)malloc(n * sizeof(double));
+    double *sort_mass = (double *)malloc(n * sizeof(double));
+    double *sort_potential = (double *)malloc(n * sizeof(double));
+    double *sort_fx = (double *)malloc(n * sizeof(double));
+    double *sort_fy = (double *)malloc(n * sizeof(double));
+    /*資料搬遷*/
+    #pragma omp parallel for
+    for (int i = 0; i < n; i++) {
+        sort_x[i] = particles[sort_idx[i]].x;
+        sort_y[i] = particles[sort_idx[i]].y;
+        sort_mass[i] = particles[sort_idx[i]].mass;
+        sort_potential[i] = particles[sort_idx[i]].potential;
+        sort_fx[i] = particles[sort_idx[i]].fx;
+        sort_fy[i] = particles[sort_idx[i]].fy;
+    }
+    // for debug
+    // FILE *fp = fopen("log.txt", "a");
+    // for (int i = 0; i < num_leaves ; i++) {
+    //     fprintf(fp, "--------------------------------\n");
+    //     int j = leaves[i];
+    //     int start = nstart[j];
+    //     int end = nend[j];
+    //     for (int k = start; k <= end; k++) {
+    //         //寫入log.txt檔案
+    //         fprintf(fp, "leaf[%d]_P[%d]_x = %f\n", j, k, sort_x[k]);
+    //         fprintf(fp, "leaf[%d]_P[%d]_y = %f\n", j, k, sort_y[k]);
+    //         fprintf(fp, "leaf[%d]_P[%d]_mass = %f\n", j, k, sort_mass[k]);
+    //     }
+    // }
+    // printf("num_leaves = %d\n", num_leaves);
+    // fclose(fp);
 
     /* ---------- 9. 封裝回傳 ---------- */
     HilbertTree *tree = (HilbertTree *)malloc(sizeof(HilbertTree));
@@ -270,6 +318,12 @@ HilbertTree *hilbert_tree_build(const Particle *particles, int n,
     tree->max_level     = max_level;
     tree->total_nodes   = total_nodes;
     tree->n_particles   = n;
+    tree->sort_x        = sort_x;
+    tree->sort_y        = sort_y;
+    tree->sort_mass     = sort_mass;
+    tree->sort_potential = sort_potential;
+    tree->sort_fx       = sort_fx;
+    tree->sort_fy       = sort_fy;
 
     return tree;
 }

@@ -47,7 +47,7 @@
  *
  * @section array_access 陣列取值方式
  *
- * 所有陣列皆以 node_id 索引：
+ * 以 node_id 索引：
  *
  * | 陣列                | 型別        | 說明                                       |
  * |---------------------|------------|--------------------------------------------|
@@ -57,6 +57,18 @@
  * | node_cy[id]         | double     | 節點中心 y 座標                             |
  * | node_size[id]       | double     | 節點邊長                                   |
  *
+ *以 sort_indices 索引：
+ *
+ * | 陣列                | 型別        | 說明                                       |
+ * |---------------------|------------|--------------------------------------------|
+ * | sort_indices[id]    | int        | 粒子原始索引                             |
+ * | sort_x[id]         | double     | 粒子 x 座標                             |
+ * | sort_y[id]         | double     | 粒子 y 座標                             |
+ * | sort_mass[id]       | double     | 粒子質量                                   |
+ * | sort_potential[id]   | double     | 粒子勢能                                   |
+ * | sort_fx[id]         | double     | 粒子 x 方向力                             |
+ * | sort_fy[id]         | double     | 粒子 y 方向力                             |
+ *
  * 判斷節點是否為空：
  * @code
  *   node_start[id] > node_end[id]   // true → 空節點（無粒子）
@@ -65,9 +77,12 @@
  * 遍歷節點內的粒子：
  * @code
  *   for (int j = tree->node_start[id]; j <= tree->node_end[id]; j++) {
- *       int pi = tree->sort_indices[j];   // 粒子在原始陣列中的索引
- *       double x = particles[pi].x;
- *       double y = particles[pi].y;
+ *       double x = tree->sort_x[j];
+ *       double y = tree->sort_y[j];
+ *       double mass = tree->sort_mass[j];
+ *       double potential = tree->sort_potential[j];
+ *       double fx = tree->sort_fx[j];
+ *       double fy = tree->sort_fy[j];
  *   }
  * @endcode
  *

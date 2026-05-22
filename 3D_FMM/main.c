@@ -63,6 +63,10 @@ Complex c_mul_real(Complex a, double r) {
     return make_complex(a.real * r, a.imag * r);
 }
 
+Complex c_mul_c(Complex a, Complex b){
+    return(make_complex(a.real * b.real - a.imag - b.imag, a.imag * b.real + a.real * b.imag));
+}
+
 // =====================================================================
 // 2. 空間搜尋與均勻樹管理
 // =====================================================================
@@ -169,23 +173,90 @@ Box* get_neighbor(Box* box, int neighbor_index, Box* root) {
     return NULL;
 }
 
+// add some function for conveninet
+void init_const_array(double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1][2*P_TERMS+1]){
+    double facto[4*P_TERMS + 1];
+    facto[0] = 1;
+    for(int i=1;i<4*P_TERMS+1;i++) facto[i] = facto[i-1] * (double)i;
+
+    for(int l=0;l<2*P_TERMS+1;l++){
+        for(int m=0;m<l+1;m++){
+            (*pNlm)[l][m] =sqrt(facto[l-m] / facto[l+m]);
+            (*pAlm)[l][m] =((l%2) ? -1.0:1.0) /sqrt(facto[l-m] * facto[l+m]); 
+        }
+    }
+    return;
+}
+
+
+void get_sph_num(double x1, double x2, double y1, double y2, double z1, double z2, double (*pds)[3] ,double* pr, double* psintheta, double* pcostheta, Complex* pe_iphi){
+    (*pds)[0] = x1 - x2;
+    (*pds)[1] = y1 - y2;
+    (*pds)[2] = z1 - z2;
+    double dxy = pow((*pds)[0], 2) + pow((*pds)[1], 2);
+    *pr = dxy + pow((*pds)[2], 2);
+    *pcostheta = (*pds)[2] / *pr;
+    *psintheta = dxy / *pr;
+    pe_iphi->real = *pds[0] / pow(dxy, 2);
+    pe_iphi->imag = *pds[1] / pow(dxy, 2);
+    return;
+}
+
+void get_P(int Pscale, double sintheta, double costheta, double (*pPlm)){
+    (*pPlm)[0][0] = 1.0;
+    for(int m=0;m<Pscale-1;m++){
+        (*pPlm)[m+1][m+1] = -(2*m + 1) * sintheta *(*pPlm)[m][m];
+        (*pPlm)[m+1][m]   =  (2*m + 1) * costheta *(*pPlm)[m][m];
+    }
+    for(int l=2;l<=Pscale-1;l++){
+        for(int m=0;m<l;m++){
+            (*pPlm)[l][m] = (double)(2*l - 1) / (l - m) * costheta * (*pPlm)[l-1][m] 
+                          - (double)(l + m - 1) / (l - m) * (*pPlm)[l-2][m];
+        }
+    }
+    return;
+}
+
+void get_Y(int Yscale, Complex e_iphi, double (*pPlm), Complex (*pYlm), double (*pNlm)){
+    for(int l=0;l<Yscale;l++){
+        Complex exp_now = make_complex(1, 0);
+        for(int m=0;m<=l;m++){
+            (*pYlm)[l][m] = c_mul_real(exp_now, (*pNlm)[l][m] * (*pPlm)[l][m]);
+            exp_now = c_mul_c(exp_now, e_iphi); // exp(i*m*phi)
+        }
+    }
+    return;
+}
+
 // =====================================================================
 // 3. FMM 算子 (Operators)
 // =====================================================================
 // (這部分物理公式維持你修正後的正確版)
 
-void p2m(Box* box, Particle* particles) {
+void p2m(Box* box, Particle* particles, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1][2*P_TERMS+1]) {
     if (!box->is_leaf) return;
-    for (int i = 0; i < box->num_particles; i++) {
+    Complex Mlm[P_TERMS+1][P_TERMS+1];
+    for(int i=0;i<=P_TERMS;i++) for(int j=0;j<=P_TERMS;j++) Mlm[i][j]=0;
+
+    for (int i = 0; i < box->num_particles; i++){
         Particle* p = &particles[box->particle_indices[i]];
-        double r = sqrt(pow(p->x - box->cx, 2) + pow(p->y - box->cy, 2) + pow(p->z - box->cz, 2));
-        int idx = 0;
-        for (int l = 0; l <= P_TERMS; l++) {
-            for (int m = 0; m <= l; m++) {
-                box->multipole[idx] = c_add(box->multipole[idx], make_complex(p->charge * pow(r, l), 0));
-                idx++;
+        double ds[3], r, sintheta, costheta;
+        Complex e_iphi, Ylm[P_TERMS+1][P_TERMS+1], Mlm[P_TERMS+1][2*P_TERMS+1];
+
+        get_r_related(particles->x, box->cx, particles->y, box->cy, particles->z, box->cz, 
+                      &ds, &r, &sintheta, &costheta, &e_iphi);
+        get_P(P_TERMS + 1, costheta, &Plm);
+        get_Y(P_TERMS + 1, e_iphi, &Plm, &Ylm, pNlm);
+        double r_now = 1;
+        for(int l=0;l<P_TERMS+1;l++){
+            double coeff_indep_m = particles->charge ** r_now;
+            r_now *= r;
+            for(int m=-l;m<=l;m++){
+                if(m>=0) Mlm[l, P_TERMS+m] += r_now * Ylm[l][m];
+                else Mlm[l, P_TERMS+m] += r_now * make_complex(Ylm[l][-m].real, -Ylm[l][-m].imag); // conj of Y
             }
         }
+        (*box).multipole = Mlm;
     }
 }
 
@@ -363,8 +434,9 @@ void free_tree(Box* box) {
 int main() {
     int N = 500;
     int MAX_LEVEL=(int)(log((double)N / MAX_PARTICLES) / log(8.0));
+    double Nlm[2*P_TERMS+1][2*P_TERMS+1], Alm[2*P_TERMS+1][2*P_TERMS+1]; // some const array needed for P2M and etc...
     Particle* particles = (Particle*)malloc(sizeof(Particle) * N);
-    
+
     srand(42);
     for (int i = 0; i < N; i++) {
         particles[i].x = (double)rand() / RAND_MAX;
@@ -373,14 +445,17 @@ int main() {
         particles[i].charge = 1.0;
         particles[i].potential = 0.0;
     }
+    // build Nlm,Alm
+    init_const_array(&Alm, &Nlm);
+
     // 建立根節點
     Box* root = create_box(0.5, 0.5, 0.5, 1.0, 0, NULL);
     build_uniform_tree(root,MAX_LEVEL);
     for (int i = 0; i < N; i++) insert_particle(root, i, particles);
 
-    upward_pass(root, particles);
-    downward_pass(root, root);
-    evaluate(root, root, particles);
+    upward_pass(root, particles, &Alm, &Nlm);
+    downward_pass(root, root, &Alm, &Nlm);
+    evaluate(root, root, particles, &Alm, &Nlm);
 
     double direct_pot = 0;
     for (int i = 1; i < N; i++) {

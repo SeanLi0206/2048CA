@@ -67,6 +67,9 @@ Complex c_mul_c(Complex a, Complex b){
     return(make_complex(a.real * b.real - a.imag - b.imag, a.imag * b.real + a.real * b.imag));
 }
 
+Complex c_plus_c(Complex a, Complex b){
+    return(make_complex(a.real + b.real, a.imag + b.imag));
+}
 // =====================================================================
 // 2. 空間搜尋與均勻樹管理
 // =====================================================================
@@ -173,7 +176,7 @@ Box* get_neighbor(Box* box, int neighbor_index, Box* root) {
     return NULL;
 }
 
-// add some function for conveninet
+// convenient functions
 void init_const_array(double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1][2*P_TERMS+1]){
     double facto[4*P_TERMS + 1];
     facto[0] = 1;
@@ -235,13 +238,13 @@ void get_Y(int Yscale, Complex e_iphi, double (*pPlm), Complex (*pYlm), double (
 
 void p2m(Box* box, Particle* particles, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1][2*P_TERMS+1]) {
     if (!box->is_leaf) return;
-    Complex Mlm[P_TERMS+1][P_TERMS+1];
+    Complex Mlm[P_TERMS+1][2*P_TERMS+1];
     for(int i=0;i<=P_TERMS;i++) for(int j=0;j<=P_TERMS;j++) Mlm[i][j]=0;
 
     for (int i = 0; i < box->num_particles; i++){
         Particle* p = &particles[box->particle_indices[i]];
-        double ds[3], r, sintheta, costheta;
-        Complex e_iphi, Ylm[P_TERMS+1][P_TERMS+1], Mlm[P_TERMS+1][2*P_TERMS+1];
+        double ds[3], r, sintheta, costheta, Plm[P_TERMS+1][P_TERMS+1];
+        Complex e_iphi, Ylm[P_TERMS+1][P_TERMS+1];
 
         get_r_related(particles->x, box->cx, particles->y, box->cy, particles->z, box->cz, 
                       &ds, &r, &sintheta, &costheta, &e_iphi);
@@ -260,21 +263,42 @@ void p2m(Box* box, Particle* particles, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1]
     }
 }
 
-void m2m(Box* parent) {
+void m2m(Box* parent, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1][2*P_TERMS+1]) {
     memset(parent->multipole, 0, sizeof(Complex) * P_TOTAL);
-    for (int i = 0; i < 8; i++) {
-        Box* child = parent->children[i];
-        if (!child) continue;
-        double dist = sqrt(pow(child->cx - parent->cx, 2) + pow(child->cy - parent->cy, 2) + pow(child->cz - parent->cz, 2));
-        int idx = 0;
-        for (int l = 0; l <= P_TERMS; l++) {
-            for (int m = 0; m <= l; m++) {
-                double weight = pow(dist, l);
-                parent->multipole[idx] = c_add(parent->multipole[idx], c_mul_real(child->multipole[idx], weight));
-                idx++;
+    Complex Mlm[P_TERMS+1][2*P_TERMS+1];
+    Complex i_power[4] = {make_complex(0, 1), make_complex(-1, 0), make_complex(0, -1), make_complex(1, 0)};
+    for(int i=0;i<8;i++){
+        double ds[3], r, sintheta, costheta, Plm[P_TERMS+1][P_TERMS+1];
+        Complex e_iphi, Ylm[P_TERMS+1][P_TERMS+1];
+        Box *child = parent->children;
+        get_sph_num(child->cx, parent->cx, child->cy, parent->cy, child->cz, parent->cz, &ds, &r, &sintheta, &costheta, &e_iphi);
+        get_P(P_TERMS+1, sintheta, costheta, &Plm);
+        get_Y(P_TERMS+1, e_iphi, &Plm, &Ylm, pNlm);
+
+        Complex Olm[P_TERMS+1][2*P_TERMS+1] = (parent->children)->multipole;
+        for(int j=0;j<=P_TERMS;j++){
+            for(int k=-j;k<=j;k++){
+                Complex add_num = make_complex(0, 0);
+                double r_now = 1;
+                for(int n=0;n<=j;n++){
+                    for(int m=-n;m<=n;m++){
+                        if(abs(k-m) > j-n) continue;
+                        Complex flag;
+                        if(m>=0) flag = make_complex(Ylm[n][m].real, -Ylm[n][m].imag);
+                        else flag = Ylm[n][-m];
+                        
+
+                        add_num += Olm[j-n][P_TERMS+k-m] * i_power[(abs(k)-abs(m)-abs(k-m))%4]
+                                 * (*pAlm)[n][abs(m)] * (*pAlm)[j-n][abs(k-m)] * r_now * flag; 
+                    }
+                    r_now *= n;
+                }
+                Mlm[j, P_TERMS+k] += add_num / (*pAlm)[j][abs(k)];
             }
         }
+        parent->multipole += Mlm;
     }
+    return;
 }
 
 void m2l(Box* target, Box* source) {

@@ -298,11 +298,13 @@ def L2L(parent, child):
                 for m in range(-n, n + 1):
                     if(m - k > 0) : flag = Ylm[n - j, m - k]
                     else: flag = np.conj(Ylm[n - j, k - m])
-
-                    add_num += Onm[n, MAX_P + m] * (1.0j)**(abs(m) - abs(m - k) - abs(k)) \
-                                * Anm[n - j, abs(m - k)] * Anm[j, abs(k)] * flag * rs_now \
-                                / ((-1)**(n + j) * Anm[n, abs(m)]) 
-            Ljk[j, MAX_P + k] += add_num
+                    add_num = c_add(add_num,
+                        c_mul_real(
+                            c_mul_c(
+                                c_mul_c(Olm[n][P_TERMS+m], i_power[((abs(m)-abs(m-k)-abs(k))%4+4)%4]),
+                                flag),
+                            pAlm[n-j][abs(m-k)] * pAlm[j][abs(k)] * rs_now / (mn_power * pAlm[n][abs(m)])));
+                                Ljk[j, MAX_P + k] += add_num
     child.local_coeffs += Ljk
 
 def L2P_batch(node, pa):

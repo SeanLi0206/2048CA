@@ -338,18 +338,37 @@ void m2l(Box* target, Box* source, double (*pAlm)[2*P_TERMS+1], double (*pNlm)[2
     return;
 }
 
-void l2l(Box* parent) {
+void l2l(Box* parent, double (*pAlm)[2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1]) {
     if (parent->is_leaf) return;
     for (int i = 0; i < 8; i++) {
-        Box* child = parent->children[i];
-        if (!child) continue;
-        double dist = sqrt(pow(child->cx - parent->cx, 2) + pow(child->cy - parent->cy, 2) + pow(child->cz - parent->cz, 2));
-        int idx = 0;
-        for (int l = 0; l <= P_TERMS; l++) {
-            for (int m = 0; m <= l; m++) {
-                double weight = pow(dist, l);
-                child->local[idx] = c_add(child->local[idx], c_mul_real(parent->local[idx], weight));
-                idx++;
+        Box *child = parent->children[i];
+        if(!child) continue;
+        double ds[3], r, sintheta, costheta, Plm[P_TERMS+1][2*P_TERMS+1];
+        Complex e_iphi, Ylm[P_TERMS+1][2*P_TERMS+1];
+        get_sph_num(child->cx, parent->cx, child->cy, parent->cy, child->cz, parent->cz, ds, &r, &sintheta, &costheta, &e_iphi);
+        get_P(2*P_TERMS+1, sintheta, costheta, Plm);
+        get_Y(2*P_TERMS+1, e_iphi, Plm, Ylm, pNlm);
+
+        Complex (*Olm)[P_TERMS+1][2*P_TERMS+1] = parent->local;
+        for(int j=0;j<=P_TERMS;j++){
+            for(int k=-j;k<=j;k++){
+                Complex add_num = make_complex(0, 0);
+                for(int n=j;n<=P_TERMS;n++){
+                    double rnow = pow(r, n-j), mn_power[2]={1, -1};
+                    for(int m=-n;m<=n;m++){
+                        Complex flag;
+                        if(m-k>0) flag = Ylm[n-j][m-k];
+                        else flag = make_complex(Ylm[n-j][k-m].real, -Ylm[n-j][k-m].imag);
+                        add_num = c_add(add_num,
+                            c_mul_real(
+                                c_mul_c(
+                                    c_mul_c(Olm[n][P_TERMS+m], i_power[((abs(m)-abs(m-k)-abs(k))%4+4)%4]),
+                                    flag),
+                                pAlm[n-j][abs(m-k)] * pAlm[j][abs(k)] * rnow / (mn_power[((n+j)%2+2)%2] * pAlm[n][abs(m)])));                        
+                    }
+
+                }
+                child->local[j][P_TERMS+k] = c_add(child->local[j][P_TERMS+k], add_num);
             }
         }
     }

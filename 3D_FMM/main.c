@@ -67,9 +67,6 @@ Complex c_mul_c(Complex a, Complex b){
     return(make_complex(a.real * b.real - a.imag - b.imag, a.imag * b.real + a.real * b.imag));
 }
 
-Complex c_plus_c(Complex a, Complex b){
-    return(make_complex(a.real + b.real, a.imag + b.imag));
-}
 // =====================================================================
 // 2. 空間搜尋與均勻樹管理
 // =====================================================================
@@ -238,7 +235,7 @@ void get_Y(int Yscale, Complex e_iphi, double (*pPlm)[Yscale], Complex (*pYlm)[Y
 // =====================================================================
 // (這部分物理公式維持你修正後的正確版)
 
-void p2m(Box* box, Particle* particles, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1][2*P_TERMS+1]) {
+void p2m(Box* box, Particle* particles, double (*pNlm)[2*P_TERMS+1]) {
     if (!box->is_leaf) return;
     Complex Mlm[P_TERMS+1][2*P_TERMS+1];
     for(int i=0;i<=P_TERMS;i++) for(int j=0;j<=P_TERMS;j++) Mlm[i][j]=0;
@@ -265,7 +262,7 @@ void p2m(Box* box, Particle* particles, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1]
     }
 }
 
-void m2m(Box* parent, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1][2*P_TERMS+1]) {
+void m2m(Box* parent, double (*pAlm)[2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1]) {
     memset(parent->multipole, 0, sizeof(Complex) * P_TOTAL);
     Complex i_power[4] = {make_complex(0, 1), make_complex(-1, 0), make_complex(0, -1), make_complex(1, 0)};
     for(int i=0;i<8;i++){
@@ -276,7 +273,7 @@ void m2m(Box* parent, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2
         get_P(P_TERMS+1, sintheta, costheta, Plm);
         get_Y(P_TERMS+1, e_iphi, Plm, Ylm, pNlm);
 
-        Complex (*Olm)[P_TERMS+1][2*P_TERMS+1] = child->multipole;
+        Complex (*Olm)[2*P_TERMS+1] = child->multipole;
         for(int j=0;j<=P_TERMS;j++){
             for(int k=-j;k<=j;k++){
                 Complex add_num = make_complex(0, 0);
@@ -301,17 +298,35 @@ void m2m(Box* parent, double (*pAlm)[2*P_TERMS+1][2*P_TERMS+1], double (*pNlm)[2
     return;
 }
 
-void m2l(Box* target, Box* source) {
-    double r = sqrt(pow(target->cx - source->cx, 2) + pow(target->cy - source->cy, 2) + pow(target->cz - source->cz, 2));
-    if (r < 1e-9) return;
-    int idx = 0;
-    for (int l = 0; l <= P_TERMS; l++) {
-        for (int m = 0; m <= l; m++) {
-            double transfer = 1.0 / pow(r, l + 1);
-            target->local[idx] = c_add(target->local[idx], c_mul_real(source->multipole[idx], transfer));
-            idx++;
+void m2l(Box* target, Box* source, double (*pAlm)[2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1]) {
+    double ds[3], r, sintheta, costheta, Plm[2*P_TERMS+1][2*P_TERMS+1];
+    Complex e_iphi, Ylm[2*P_TERMS+1][2*P_TERMS+1];
+    Complex i_power[4] = {make_complex(0, 1), make_complex(-1, 0), make_complex(0, -1), make_complex(1, 0)};
+    get_sph_num(source->cx, target->cx, source->cy, target->cy, source->cz, target->cz, ds, &r, &sintheta, &costheta, &e_iphi);
+    get_P(2*P_TERMS+1, sintheta, costheta, Plm);
+    get_Y(2*P_TERMS+1, e_iphi, Plm, Ylm, pNlm);
+
+    Complex (*Olm)[2*P_TERMS+1] = source->multipole;
+    for(int j=0;j<=P_TERMS;j++){
+        for(int k=-j;k<=j;k++){
+            double m1_now = 1, rnow = pow(r, j+1);
+            Complex add_num = make_complex(0, 0);
+            for(int n=0;n<=P_TERMS;n++){
+                for(int m=-n;m<=n;m++){
+                    Complex flag;
+                    if(m-k<0) flag = make_complex(Ylm[j+n][-m+k].real, -Ylm[j+n][-m+k].imag);
+                    else flag = Ylm[j+n][m-k];
+
+                    add_num = c_add(add_num, c_mul_real(c_mul_c(c_mul_c(Olm[n][P_TERMS+m], i_power[((abs(k-m)-abs(k)-abs(m))%4+4)%4]), flag), 
+                                             pAlm[n][abs(m)] * pAlm[j][abs(k)]/ (m1_now * rnow * pAlm[j+n][abs(m-k)])));
+                }
+                m1_now *= -1;
+                rnow *= r;
+            }
+            target->local[j][P_TERMS+k] = c_add(target->local[j][P_TERMS+k], add_num);
         }
     }
+    return;
 }
 
 void l2l(Box* parent) {

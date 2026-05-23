@@ -67,6 +67,10 @@ Complex c_mul_c(Complex a, Complex b){
     return(make_complex(a.real * b.real - a.imag - b.imag, a.imag * b.real + a.real * b.imag));
 }
 
+Complex c_conj(Complex a){
+    return(make_complex(a.real, -a.imag));
+}
+
 // =====================================================================
 // 2. 空間搜尋與均勻樹管理
 // =====================================================================
@@ -374,18 +378,30 @@ void l2l(Box* parent, double (*pAlm)[2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1]) 
     }
 }
 
-void l2p(Box* box, Particle* particles) {
+void l2p(Box* box, Particle* particles, double (*pAlm)[2*P_TERMS+1], double (*pNlm)[2*P_TERMS+1]) {
     if (!box->is_leaf) return;
     for (int i = 0; i < box->num_particles; i++) {
         Particle* p = &particles[box->particle_indices[i]];
-        double r = sqrt(pow(p->x - box->cx, 2) + pow(p->y - box->cy, 2) + pow(p->z - box->cz, 2));
-        int idx = 0;
-        for (int l = 0; l <= P_TERMS; l++) {
-            for (int m = 0; m <= l; m++) {
-                p->potential += box->local[idx].real * pow(r, l);
-                idx++;
+        double ds[3], r, sintheta, costheta, Plm[P_TERMS+1][P_TERMS+1];
+        Complex e_iphi, Ylm[P_TERMS+1][P_TERMS+1];
+        get_sph_num(p->x, box->cx, p->y, box->cy, p->z, box->cz, ds, &r, &sintheta, &costheta, &e_iphi);
+        get_P(P_TERMS+1, sintheta, costheta, Plm);
+        get_Y(P_TERMS+1, e_iphi, Plm, Ylm, pNlm);
+
+        Complex (*Ljk)[2*P_TERMS+1] = box->local, pot = make_complex(0, 0);
+        double rnow =1;
+        for(int j=0;j<=P_TERMS;j++){
+            for(int  k=-j;k<=j;k++){
+                Complex flag;
+                if(k<0) flag = c_conj(Ylm[j][-k]);
+                else flag = Ylm[j][k];
+                pot = c_add(pot, 
+                            c_mul_c(Ljk[j][P_TERMS+k], 
+                                c_mul_real(flag, rnow)));
             }
+            rnow *= r;
         }
+        p->potential -= pot.real;
     }
 }
 

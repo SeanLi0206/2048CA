@@ -242,8 +242,6 @@ void get_Y(int Yscale, Complex e_iphi, double (*pPlm)[Yscale], Complex (*pYlm)[Y
 
 void p2m(Box* box, Particle* particles, double (*pNlm)[2*P_TERMS+1]) {
     if (!box->is_leaf) return;
-    Complex Mlm[P_TERMS+1][2*P_TERMS+1];
-    for(int i=0;i<=P_TERMS;i++) for(int j=0;j<=P_TERMS;j++) Mlm[i][j]=make_complex(0, 0);
 
     for (int i = 0; i < box->num_particles; i++){
         Particle* p = &particles[box->particle_indices[i]];
@@ -260,8 +258,8 @@ void p2m(Box* box, Particle* particles, double (*pNlm)[2*P_TERMS+1]) {
             double coeff_indep_m = p->charge * pow(r_now, l);
             for(int m=-l;m<=l;m++){
                 Complex flag;
-                if(m>=0) flag = Ylm[l][m];
-                else flag = c_conj(Ylm[l][-m]);
+                if(m>=0) flag = c_conj(Ylm[l][m]);
+                else flag = Ylm[l][m];
                 box->multipole[l][P_TERMS+m] =c_add(box->multipole[l][P_TERMS+m], coeff_indep_m * flag);
             }
             r_now *= r;
@@ -405,7 +403,7 @@ void l2p(Box* box, Particle* particles, double (*pAlm)[2*P_TERMS+1], double (*pN
             }
             rnow *= r;
         }
-        p->potential -= pot.real;
+        p->potential += pot.real;
     }
 }
 
